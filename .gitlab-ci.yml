@@ -1,0 +1,74 @@
+image: docker:stable
+
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  IMAGE: ${CI_REGISTRY}/${CI_PROJECT_NAMESPACE}/${CI_PROJECT_NAME}
+
+build:
+  stage: build
+  services:
+    - docker:dind
+  variables:
+    DOCKER_DRIVER: overlay2
+  script:
+    - cd app
+    - docker login -u $CI_REGISTRY_USER -p $CI_JOB_TOKEN $CI_REGISTRY
+    - docker pull registry.gitlab.com/christiansb24/movies-project:latest || true
+    - echo g9HnmOj45D98Sp9ijcRMcfBwHwT5193A0F56jzFmptGbe2zi5ghbIbf
+    - docker build
+        --cache-from registry.gitlab.com/christiansb24/movies-project:latest
+        --tag registry.gitlab.com/christiansb24/movies-project:latest
+        --file ./Dockerfile.prod
+        --build-arg SECRET_KEY=g9HnmOj45D98Sp9ijcRMcfBwHwT5193A0F56jzFmptGbe2zi5ghbIbf
+        "."
+    - docker push registry.gitlab.com/christiansb24/movies-project:latest
+
+test:
+  stage: test
+  image: registry.gitlab.com/christiansb24/movies-project:latest
+  services:
+    - postgres:latest
+  variables:
+    POSTGRES_DB: users
+    POSTGRES_USER: runner
+    POSTGRES_PASSWORD: runner
+    DATABASE_TEST_URL: postgres://runner:runner@postgres:5432/users
+  script:
+    - cd app
+    - python3.9 -m venv env
+    - source env/bin/activate
+    - pip install -r requirements.txt
+    - pip install black==20.8b1 flake8===3.8.4 isort==5.7.0 pytest==6.2.1 pytest-django==4.1.0
+    - export DEBUG=1
+    - pytest -p no:warnings
+    - flake8 .
+    - black . --check --exclude="migrations|env"
+    - isort . --check-only --skip env
+    - export DEBUG=0
+    - python manage.py check --deploy --fail-level=WARNING
+
+deploy:
+  stage: deploy
+  services:
+    - docker:dind
+  variables:
+    DOCKER_DRIVER: overlay2
+    HEROKU_APP_NAME: boiling-reef-54335
+    HEROKU_REGISTRY_IMAGE: registry.heroku.com/boiling-reef-54335/web
+  script:
+    - apk add --no-cache curl
+    - cd app
+    - docker build
+        --tag $HEROKU_REGISTRY_IMAGE
+        --file ./Dockerfile.prod
+        --build-arg SECRET_KEY=g9HnmOj45D98Sp9ijcRMcfBwHwT5193A0F56jzFmptGbe2zi5ghbIbf
+        "."
+    - docker login -u _ -p $HEROKU_AUTH_TOKEN registry.heroku.com
+    - docker push $HEROKU_REGISTRY_IMAGE
+    - cd ..
+    - chmod +x ./release.sh
+    - ./release.sh
